@@ -1,0 +1,97 @@
+# Определение Deployment для управления подами приложения
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app-deployment
+  namespace: default
+  labels:
+    app: my-app
+spec:
+  # Минимальное количество подов для пиковой нагрузки
+  replicas: 4
+  selector:
+    matchLabels:
+      app: my-app
+  # Стратегия RollingUpdate для минимизации downtime
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # Допускается 1 дополнительный под во время обновления
+      maxUnavailable: 0  # Не допускается недоступность подов во время обновления
+  template:
+    metadata:0
+      labels:
+        app: my-app
+    spec:
+      # Используем podAntiAffinity для распределения подов по разным нодам и зонам
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: my-app
+              topologyKey: kubernetes.io/hostname  # Размещение на разных нодах
+          - weight: 50
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: my-app
+              topologyKey: topology.kubernetes.io/zone  # Размещение в разных зонах
+      containers:
+      - name: my-app
+        image: my-app:latest  # Предполагаемый образ приложения
+        ports:
+        - containerPort: 8080  # Порт приложения
+        # Ресурсы для контейнера
+        resources:
+          requests:
+            cpu: "100m"      # Минимальный CPU для стабильной работы
+            memory: "128Mi"  # Стабильное потребление памяти
+          limits:
+            cpu: "500m"      # Лимит CPU для учета пика при старте
+            memory: "128Mi"  # Лимит памяти фиксирован
+        # Проверка готовности приложения после инициализации
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5  # Ждем 5 секунд перед первой проверкой
+          periodSeconds: 10       # Периодичность проверок
+        # Проверка старта приложения (учитываем 5-10 секунд инициализации)
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          failureThreshold: 30    # До 30 попыток (30 * 1s = 30 секунд для старта)
+          periodSeconds: 1
+        # Проверка работоспособности приложения
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15  # Ждем 15 секунд перед первой проверкой
+          periodSeconds: 20        # Периодичность проверок
+
+---
+# Определение HorizontalPodAutoscaler для автоматического масштабирования
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: my-app-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: my-app-deployment
+  minReplicas: 2        # Минимальное количество подов ночью
+  maxReplicas: 6        # Максимальное количество подов для пиковой нагрузки
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70  # Целевая загрузка CPU 70% для масштабирования
